@@ -6,9 +6,6 @@ output: html_document
 ---
 
 #Set up R
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
 ##Load libraries
 ```{r}
 library(dplyr)
@@ -66,6 +63,126 @@ personcol<-c(
 )
 ```
 #Prepare data
+Based on the Excel sheet 'All data sorted by gender'
+```{r}
+#Load in data
+peach<-read.csv("Peaches study 2019 sensory results inc Italian peach sample sorted agh 311020.csv")
+
+#Look at data structure
+str(peach)
+
+#Convert all columns to factors
+peach<-as.data.frame(lapply(peach, as.factor))
+
+#Add in the correct names to the factor levels for person characteristics
+levels(peach$Site)<-c("CardiffMet", "CardiffUni", "Calabria")
+levels(peach$Gender)<-c("Male", "Female", "NA")
+levels(peach$Age)<-c("18-29",	"30-39",	"40-49",	"50-59",	"60+",	"NA")
+levels(peach$Ethnic)<-c("Caucasian",	"Asian",	"Hispanic",	"Black",	"NativeAmerican",	"Other", "NA")
+#Convert "3" to "NA"
+peach$Nation<-as.character(peach$Nation)
+peach$Nation[peach$Nation=="3"]<-NA
+peach$Nation<-as.factor(peach$Nation)
+
+#Add in the correct names to the factor levels for purchase characteristics
+levels(peach$Frequency)<-c(">1perWeek",	"Weekly",	"2-3perWeek",	"<1perMonth",	"NA",	">1perMonth")
+levels(peach$Name)<-c("Yes", "No", "NA")
+peach$If.yes<-as.character(peach$If.yes)
+peach$If.yes[peach$If.yes==3]<-NA
+#Change value of 11 in Ripeness to 1
+peach$Ripeness<-as.factor(gsub("11","1",peach$Ripeness))
+for (i in names(peach[,c("Ripeness", "Colour", "Size", "Shape", "Blemishes", "Price", "Aroma", "Texture", "Taste", "Retailer", "BB4", "Other")])){
+  levels(peach[,i])<-c("Yes", "No", "NA")
+}
+#Convert "3" to "NA"
+peach$Explanation<-as.character(peach$Explanation)
+peach$Explanation[peach$Explanation==3]<-NA
+
+#Convert the ratings back to numeric
+peach$Rate.295<-as.numeric(as.character(peach$Rate.295))
+peach$Rate.733<-as.numeric(as.character(peach$Rate.733))
+peach$Rate.837<-as.numeric(as.character(peach$Rate.837))
+
+#Add in the correct names to the factor levels for peach characteristics
+for (i in names(peach[,grep("X[0-9]{3}.[^O]", names(peach))])){
+  levels(peach[,i])<-c("Yes", "No")}
+#Set "3" to "NA" in the "Other" columns
+for (i in names(peach[,grep("X[0-9]{3}.Other", names(peach))])){
+  peach[,i]<-as.character(peach[,i])
+  peach[,i][peach[,i]==3]<-NA}
+
+#Make sure all NAs are properly coded, then remove unused levels
+peach[peach=="NA"]<-NA
+peach<-droplevels(peach)
+
+summary(peach)
+
+#Give each respondent a unique ID
+peach$Respondent<-seq(1:nrow(peach))
+
+library(tidyr)
+#Stack the ratings along with the person and purchase characteristics 
+longpeach<-peach[,c(61,1:24)] %>% 
+  pivot_longer(cols = c("Rate.837", "Rate.295", "Rate.733"), 
+                       names_to = "Treatment", 
+                       values_to = "Rating",
+                       names_prefix = "Rate.")
+#Sort the data by Treatment and respondent ID to make sure it is in the correct order for the next step
+longpeach<-longpeach[order(longpeach$Treatment, longpeach$Respondent),]
+longpeach$Treatment<-as.factor(longpeach$Treatment)
+#Rename the levels
+levels(longpeach$Treatment)<-c("Stored1C",	"Fresh",	"Stored5C")
+
+#Add in the peach characteristics
+for (i in c("peachy.aroma", "sweet", "acid", "bitter", "astringent", "juicy", "crunchy", "chewy..fibrous.skin", "firm.flesh", "soft.flesh", "mealy..mushy.flesh")){
+  longpeach[1:nrow(peach),i]<-peach[,paste0("X295.", i)]
+  longpeach[(nrow(peach)+1):(2*nrow(peach)),i]<-peach[,paste0("X733.", i)]
+  longpeach[(2*nrow(peach)+1):(3*nrow(peach)),i]<-peach[,paste0("X837.", i)]
+}
+
+#Tidy up names
+names(longpeach)<-gsub("Aroma","Scent",names(longpeach))
+names(longpeach)<-gsub("peachy.aroma","aroma",names(longpeach))
+names(longpeach)<-gsub("mealy..mushy.flesh","Mealy",names(longpeach))
+names(longpeach)<-gsub(".+\\.{2}","",names(longpeach))
+names(longpeach)<-gsub("(.+)\\..+","\\1",names(longpeach))
+names(longpeach)<-toTitleCase(names(longpeach))
+
+#Tidy up nationality column
+longpeach$Nation<-as.character(longpeach$Nation)
+sort(unique(longpeach$Nation))
+
+longpeach$Nation[longpeach$Nation=="Welsh British"]<-"Welsh"
+longpeach$Nation[longpeach$Nation=="British Welsh"]<-"Welsh"
+longpeach$Nation[longpeach$Nation=="British Scottish"]<-"Scottish"
+longpeach$Nation[longpeach$Nation=="British European"]<-"British"
+longpeach$Nation[longpeach$Nation=="UK"]<-"British"
+longpeach$Nation[longpeach$Nation=="EU"]<-"European"
+
+longpeach$Nation[longpeach$Nation=="KURDISTAN"]<-"Kurdistan"
+
+longpeach$Nation[longpeach$Nation=="Turkey"]<-"Turkish"
+longpeach$Nation[longpeach$Nation=="Spain"]<-"Spanish"
+longpeach$Nation[longpeach$Nation=="China"]<-"Chinese"
+longpeach$Nation[longpeach$Nation=="Italy"]<-"Italian"
+longpeach$Nation[longpeach$Nation=="Pakistan" | longpeach$Nation=="Pakastani"]<-"Pakistani"
+
+longpeach$Nation<-as.factor(longpeach$Nation)
+summary(longpeach$Nation)
+
+#Add country column
+longpeach$Country[longpeach$Site=="Calabria"]<-"Italy"
+longpeach$Country[longpeach$Site=="CardiffMet" | longpeach$Site=="CardiffUni"]<-"UK"
+longpeach$Country<-as.factor(longpeach$Country)
+
+#Convert to data frame
+longpeach<-as.data.frame(longpeach)
+#Relevel Treatments and Sites
+longpeach$Treatment<-factor(longpeach$Treatment, levels = c("Stored1C",	"Stored5C",	"Fresh"))
+longpeach$Site<-relevel(longpeach$Site, ref = "Calabria")
+
+write.csv(longpeach, "longpeach.csv")
+```
 ##Separate out the peach characteristics and convert them to presence/absence
 ```{r}
 PAchars<-longpeach[,25:35]=="Yes"
