@@ -449,6 +449,11 @@ qqnorm(longpeach$Rating)
 #Based on peach characteristics
 mod1<-clmm(as.factor(Rating)~Aroma + Sweet + Acid + Bitter + Astringent + Juicy + Crunchy + Fibrous + Firm + Soft + Mealy + (1|Respondent), data = peachperson, na.action = na.fail)
 
+#Check assumptions
+mod1.check<-clm(as.factor(Rating)~Aroma + Sweet + Acid + Bitter + Astringent + Juicy + Crunchy + Fibrous + Firm + Soft + Mealy + Respondent, data = peachperson, na.action = na.fail)
+
+nominal_test(mod1.check)
+
 #Get the full model set and export it (as it takes a long time to run)
 #peach.model.set<-dredge(mod1)
 #saveRDS(peach.model.set, "peach.model.set.Rdata")
@@ -471,6 +476,12 @@ av.param$Full<-av.mod$coefficients[1,10:20]
 
 #Based on person characteristics
 mod2<-clmm(as.factor(Rating)~Site + Gender + Age + Ethnic + Frequency2 + (1|Respondent), data = peachperson, na.action = na.fail) #omitted Nation due to singularities
+
+#Check assumptions
+mod2.check<-clm(as.factor(Rating)~Site + Gender + Age + Ethnic + Frequency2 + Respondent, data = peachperson, na.action = na.fail)
+
+nominal_test(mod2.check)
+#Some problems - thankfully detailed results not needed for this model
 
 par(mfrow=c(2,2)); plot(mod2); par(mfrow=c(1,1))
 person.model.set<-dredge(mod2)
@@ -555,6 +566,11 @@ boxplot(siteIT$Rating~siteIT$Respondent)
 
 #Test the effect of treatment and site
 likemod<-clmm(as.factor(Rating)~Site+Treatment+Site:Treatment + (1|Respondent), data = longpeach)
+
+#Check assumptions
+likemod.check<-clm(as.factor(Rating)~Site+Treatment+Site:Treatment + Respondent, data = longpeach)
+
+nominal_test(likemod.check)
 
 RVAideMemoire::Anova.clmm(likemod, type="II")
 
