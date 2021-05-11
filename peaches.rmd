@@ -84,7 +84,7 @@ peach<-as.data.frame(lapply(peach, as.factor))
 levels(peach$Site)<-c("CF1", "CF2", "IT")
 levels(peach$Gender)<-c("Male", "Female", "NA")
 levels(peach$Age)<-c("18-29",	"30-39",	"40-49",	"50-59",	"60+",	"NA")
-levels(peach$Ethnic)<-c("Caucasian",	"Asian",	"Hispanic",	"Black",	"NativeAmerican",	"Other", "NA")
+levels(peach$Ethnic)<-c("Caucasian",	"Asian",	"Hispanic",	"Black",	"Other", "NA")
 #Convert "3" to "NA"
 peach$Nation<-as.character(peach$Nation)
 peach$Nation[peach$Nation=="3"]<-NA
@@ -217,6 +217,15 @@ for (col in names(peachperson[,10:20])){
 ##Create a dataset with only the purchase characteristics
 ```{r}
 purchasedat<-longpeach[longpeach$Treatment=="Fresh",c(1:22, 36:37)]
+names(purchasedat)<-gsub("Scent", "Aroma", names(purchasedat))
+names(purchasedat)<-gsub("Name", "Variety", names(purchasedat))
+
+#Look at the distribution of person characterstics
+round(sapply(summary(purchasedat$Gender),function(x)x/359*100),2)
+round(sapply(summary(purchasedat$Site),function(x)x/359*100),2)
+round(sapply(summary(purchasedat$Age),function(x)x/359*100),2)
+round(sapply(summary(purchasedat$Ethnic),function(x)x/359*100),2)
+length(purchasedat$Nation[purchasedat$Nation %in% c("British", "Welsh", "English", "Scottish")])/359*100
 ```
 ##Collate characteristics which influence decision to purchase
 ```{r}
@@ -310,12 +319,14 @@ plot(Frequency2~Country, data=longpeach[longpeach$Treatment=="Fresh",])
 ##mvabund
 ```{r}
 mvpurchase<-mvabund(apply(purchasedat[!is.na(purchasedat$Frequency2),c(8,10:21)]=="Yes", 2, as.numeric))
-purchasemet<-purchasedat[!is.na(purchasedat$Frequency2),c("Country", "Frequency2")]
+purchasemet<-purchasedat[!is.na(purchasedat$Frequency2),c("Country", "Frequency2", "Gender")]
 purchasemet<-purchasemet[!is.na(rowSums(mvpurchase)),]
+mvpurchase<-mvpurchase[!is.na(purchasemet$Gender),]
 mvpurchase<-mvpurchase[!is.na(rowSums(mvpurchase)),]
+purchasemet<-purchasemet[!is.na(purchasemet$Gender),]
 
-#Assess effect of nation whilst controlling for frequency
-nat.purchasemod <- manyglm(mvpurchase ~ Frequency2 * Country, data=purchasemet, family="binomial")
+#Assess effect of nation whilst controlling for frequency and gender
+nat.purchasemod <- manyglm(mvpurchase ~ Gender + Frequency2 * Country, data=purchasemet, family="binomial")
 
 plot(nat.purchasemod)
 nat.purchase.aov<-anova(nat.purchasemod, p.uni="adjusted")
@@ -326,8 +337,14 @@ nat.purchase.aov$table
 #Look at individual characters
 nat.purchase.aov$uni.p[-1,]
 
-#Assess effect of frequency whilst controlling for nation
-freq.purchasemod <- manyglm(mvpurchase ~ Country * Frequency2, data=purchasemet, family="binomial")
+#Assess effect of gender whilst controlling for nation and frequency
+gen.purchasemod <- manyglm(mvpurchase ~ Country * Frequency2 + Gender, data=purchasemet, family="binomial")
+
+gen.purchase.aov<-anova(gen.purchasemod, p.uni="adjusted", pairwise.comp = purchasemet$Frequency2)
+gen.purchase.aov$table
+
+#Assess effect of frequency whilst controlling for nation and gender
+freq.purchasemod <- manyglm(mvpurchase ~ Gender + Country * Frequency2, data=purchasemet, family="binomial")
 
 freq.purchase.aov<-anova(freq.purchasemod, p.uni="adjusted", pairwise.comp = purchasemet$Frequency2)
 
@@ -338,7 +355,8 @@ freq.purchase.aov$uni.p[-1,]
 
 #Write output as table
 purchase.tests<-freq.purchase.aov$uni.p
-purchase.tests[2,]<-nat.purchase.aov$uni.p[3,]
+purchase.tests[2,]<-gen.purchase.aov$uni.p[4,]
+purchase.tests[3,]<-nat.purchase.aov$uni.p[4,]
 purchase.tests<-cbind(round(freq.purchase.aov$uni.test,2),
                       round(purchase.tests,3))
 purchase.tests<-purchase.tests[,order(colnames(purchase.tests))]
@@ -364,6 +382,7 @@ purchase.predict$byFreq<-aggregate(purchase.predict$stack$fitted, list(purchase.
 purchase.predict$byFreq$x<-purchase.predict$byFreq$x*100
 names(purchase.predict$byFreq)<-c("freq", "char", "percent")
 purchase.predict$byFreq$freq<-factor(purchase.predict$byFreq$freq, levels=c("<1perMonth", "WeeklyToMonthly", ">1perWeek"))
+
 ```
 ##Plot based on mvabund
 ###Differences between nations
@@ -378,20 +397,21 @@ purchase.nation.percent$nation<-rep(rownames(purchase.nation), each=13)
 
 nat.purchase.aov$uni.p[3,]
 
+width<-0.7
 purchase.plot1<-ggplot(purchase.nation.percent, aes(x=reorder(char, -percent), y=percent, fill=nation)) +
   #Real data
-  geom_col(position=position_dodge()) +
+  geom_col(position=position_dodge(), width=width) +
   #Model predictions
-  geom_col(data=purchase.predict$byNat, aes(alpha=0.25), colour="#555555",  position=position_dodge(), show.legend = F) +
+  geom_col(data=purchase.predict$byNat, aes(alpha=0.25), colour="#555555",  position=position_dodge(), show.legend = F, width=width) +
   #Real data outlines
-  geom_col(position=position_dodge(), colour="black", alpha=0, show.legend = F) +
+  geom_col(position=position_dodge(), colour="black", alpha=0, show.legend = F, width=width) +
   labs(x="Character", y="% affirmative") +
   scale_fill_manual(values=c("#32FF00", "#19B2FF"),"Nation") +
   theme_bw() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 0.8)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.8)) +
   annotate("text", x = c(1,4,5,6,7,8,10), y=c(82, 43, 47, 42, 32, 33, 24), label = "*") +
   coord_cartesian(clip = 'off') +
-  geom_text(aes(label = "(A)", x = Inf, y = 85), hjust = -1)
+  geom_text(aes(label = "(B)", x = Inf, y = 85), hjust = -1)
 ```
 ###Differences between frequences
 ```{r}
@@ -409,17 +429,17 @@ freq.purchase.aov$uni.p[3,]
 
 purchase.plot2<-ggplot(purchase.freq.percent, aes(x=reorder(char, -percent), y=percent, fill=freq)) +
   #Real data
-  geom_col(position=position_dodge(), colour="black") +
+  geom_col(position=position_dodge(), colour="black", width=width) +
   #Model predictions
-  geom_col(data=purchase.predict$byFreq, aes(alpha=0.25), colour="#555555",  position=position_dodge(), show.legend = F) +
+  geom_col(data=purchase.predict$byFreq, aes(alpha=0.25), colour="#555555",  position=position_dodge(), show.legend = F, width=width) +
   #Real data outlines
-  geom_col(position=position_dodge(), colour="black", alpha=0, show.legend = F) +
+  geom_col(position=position_dodge(), colour="black", alpha=0, show.legend = F, width=width) +
   labs(x="Character", y="% affirmative") +
   scale_fill_manual(values=c("#FFBF7F", "#FF99BF", "#E51932"),"Frequency") +
   theme_bw() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 0.8)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.8)) +
   coord_cartesian(clip = 'off') +
-  geom_text(aes(label = "(B)", x = Inf, y = 72), hjust = -1)
+  geom_text(aes(label = "(C)", x = Inf, y = 72), hjust = -1)
 
 #Plot frequency against country
 freqBycountry<-aggregate(purchasedat$Frequency2, list(purchasedat$Frequency2, purchasedat$Country), length)
@@ -432,13 +452,13 @@ purchase.plot3<-ggplot(freqBycountry, aes(x=Country, y=No, fill=Freq)) +
   labs(x="Country", y="Percent") +
   theme_bw() +
   coord_cartesian(clip = 'off') +
-  geom_text(aes(label = "(C)", x = Inf, y = 97), hjust = -1)
+  geom_text(aes(label = "(A)", x = Inf, y = 97), hjust = -1)
 
 chisq.test(purchasedat$Frequency2, purchasedat$Country)
 
-multiplot(purchase.plot1, purchase.plot3, purchase.plot2, cols = 2)
-dev.print(pdf, "./Results/PurchaseCharacteristics.pdf", height=8, width=10)
-dev.print(png, "./Results/Fig2.png", height=8, width=10, units="in", res=500)
+multiplot(purchase.plot3, purchase.plot1, cols = 2)
+dev.print(pdf, "./Results/PurchaseCharacteristics.pdf", height=5, width=10)
+dev.print(png, "./Results/Fig2.png", height=8, width=5, units="in", res=500)
 ```
 #Liking rating
 ##Modelling liking
@@ -518,12 +538,12 @@ boxplot(peach.model.set$AICc[peach.model.set$delta<6], person.model.set$AICc[per
         ylab = "AICc")
 mtext("(A)", side=3, adj=-0.2)
 plot.new()
-barplot(n.imp, ylab = "No. of occurances", xlab = "", cex.names = 0.8, las=2,
+barplot(n.imp, ylab = "No. of occurrences", xlab = "", cex.names = 0.8, las=2,
         col =  charcol[
           match(names(n.imp),names(charcol))])
 title(xlab="Peach characteristics", line=5)
 mtext("(B)", side=3, adj=-0.2)
-barplot(n.imp2, ylab = "No. of occurances", xlab = "",
+barplot(n.imp2, ylab = "No. of occurrences", xlab = "",
         col =  personcol[
           match(names(n.imp2),names(personcol))])
 title(xlab="Person characteristics", line=5)
@@ -756,6 +776,7 @@ plot(it.char.ntwk, layout=coord[match(names(V(it.char.ntwk)),names(V(all.char.ne
 plot(c1.char.ntwk, layout=coord[match(names(V(c1.char.ntwk)),names(V(all.char.netwk))),], main="Site CF1")
 plot(c2.char.ntwk, layout=coord[match(names(V(c2.char.ntwk)),names(V(all.char.netwk))),], main="Site CF2")
 par(mfrow=c(1,1))
+dev.print(pdf, "./Results/char-pairs-by-site.pdf", height=8, width=12)
 
 rbind(char.fisher[9,], c1.char.fisher[9,], c2.char.fisher[9,], it.char.fisher[9,])
 ```
@@ -894,7 +915,7 @@ rowSums(aqu[,-1])/c(465*11,612*11)*100
 plot(aqu2$Aqui~aqu2$Country)
 #Test it
 qqnorm(aqu2$Aqui);qqline(aqu2$Aqui)
-aqu.test<-dunn.test(aqu2$Aqui, aqu2$Country)
+aqu.test<-dunn.test::dunn.test(aqu2$Aqui, aqu2$Country)
 ```
 ###For each character, calculate the difference in rating when it was yes vs no
 ```{r}
@@ -923,7 +944,7 @@ diff.fx$Imp.purch<-factor(diff.fx$Imp.purch, levels = c("Yes", "No"))
 
 #Match peach characteristics to purchase characteristics
 char2purch<-matrix(c(
-  "Aroma", "Scent",
+  "Aroma", "Aroma",
   "Sweet", "Ripeness",
   "Sweet", "Taste",
   "Acid", "Taste",
@@ -985,21 +1006,39 @@ for (i in 1:nrow(char2purch)){
   abline(0,0, lty=2)
 }
 par(mfrow=c(1,1))
-
-#Model difference against purchase preference
-#Can't do mvabund as each row has at least one NA
-for (i in 1:nrow(char2purch)){
-  j<-char2purch[i,"char"]
-  h<-char2purch[i,"purch"]
-  try(m.j<-cbind(Anova(glm(char.diff[,j]~purchasedat[,h] + purchasedat$Country + purchasedat$Frequency2 + purchasedat$Gender + purchasedat[,h]:purchasedat$Country + purchasedat[,h]:purchasedat$Frequency2), type = 2), rep(j, 6), rep(h, 6)))
-  if(i == 1){tests<-m.j}
-  else{tests<-rbind(tests, m.j)}
+```
+##Model difference against purchase preference
+Can't do mvabund as each row has at least one NA
+```{r}
+for (i in unique(char2purch[,"char"])){
+  j<-unique(char2purch[,"purch"][char2purch[,"char"]==i])
+  print(paste(i, j))
+  if(length(j)>1){
+    h<-j[2]
+    j<-j[1]
+    names<-c(h, j, "Country", "Frequency", "Gender", paste0(h,":Country"), paste0(h,":Frequency"), paste0(j,":Country"), paste0(j,":Frequency"))
+    form<-as.formula("char.diff[,i] ~ purchasedat[,h] + purchasedat[,j] + purchasedat$Country + purchasedat$Frequency + purchasedat$Gender + purchasedat[,h]:purchasedat$Country + purchasedat[,h]:purchasedat$Frequency + purchasedat[,j]:purchasedat$Country + purchasedat[,j]:purchasedat$Frequency")
+  }
+  else {names<-c(j, "Country", "Frequency", "Gender", paste0(j,":Country"), paste0(j,":Frequency"))
+    form<-as.formula("char.diff[,i] ~ purchasedat[,j] +  purchasedat$Country + purchasedat$Frequency + purchasedat$Gender + purchasedat[,j]:purchasedat$Country + purchasedat[,j]:purchasedat$Frequency")
+  }
+  try(m.j<-cbind(rep(i, length(names)), names, 
+                 Anova(glm(form), type = 2)))
+  if(!exists("tests")){tests<-m.j}
+  else if (exists("m.j")) {tests<-rbind(tests, m.j)}
+  try(rm(m.j))
 }
+
+names(tests)[1:2]<-c("Character", "Predictor")
 tests[tests$`Pr(>Chisq)`<0.05,]
 #Adjust for multiple testing
 tests$P.adj<-p.adjust(tests$`Pr(>Chisq)`, method = "BH")
 tests[tests$P.adj<0.05,]
-
+#Tidy up table
+for(i in c("LR Chisq", "Pr(>Chisq)", "P.adj")){
+  tests[,i]<-round(tests[,i], 3)
+}
+write.csv(tests, "TableS5.csv", row.names = F)
 ```
 ###mvabund
 ```{r}
