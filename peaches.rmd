@@ -1,0 +1,940 @@
+---
+title: "Peaches"
+author: "Sarah Christofides"
+date: "09/11/2020"
+output: html_document
+---
+
+This version of the data merges Aromatica and Fragrante into Aroma, and Dura and Consistente into Firm. Mealy is excluded. 
+```{r, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE
+)
+```
+
+#Set up R
+##Load libraries
+```{r, include = FALSE}
+library(car)
+library(dplyr)
+library(dunn.test)
+library(emmeans)
+library(gridExtra)
+library(ggmosaic)
+library(ggplot2)
+library(igraph)
+library(mvabund)
+library(multivariMate)
+library(MuMIn)
+library(ordinal)
+library(multcomp)
+library(RVAideMemoire)
+library(tidyr)
+library(tools)
+library(vegan)
+```
+##Colours
+```{r, include = FALSE}
+#Colours for peach characteristics
+charcol<-c(
+  Aroma=rgb(red=255,green=191,blue=127,maxColorValue=255),#light orange
+  Sweet=rgb(red=255,green=127,blue=0,maxColorValue=255),#bright orange
+  Acid=rgb(red=229,green=25,blue=50,maxColorValue=255),#red
+  Bitter=rgb(red=255,green=153,blue=191,maxColorValue=255),#pink
+  Astringent=rgb(red=165,green=237,blue=255,maxColorValue=255),#light blue 
+  Juicy=rgb(red=25,green=178,blue=255,maxColorValue=255),#bright blue
+  Crunchy=rgb(red=178,green=255,blue=140,maxColorValue=255),#light green
+  Fibrous=rgb(red=50,green=255,blue=0,maxColorValue=255),#bright green
+  Firm=rgb(red=101,green=76,blue=255,maxColorValue=255),#purple
+  Soft=rgb(red=204,green=191,blue=255,maxColorValue=255)#lilac
+)
+#Colours for purchase characteristics
+purchasecol<-c(
+  Aroma=rgb(red=255,green=191,blue=127,maxColorValue=255),#light orange
+  Ripeness=rgb(red=255,green=127,blue=0,maxColorValue=255),#bright orange
+  Size=rgb(red=229,green=25,blue=50,maxColorValue=255),#red
+  Shape=rgb(red=255,green=153,blue=191,maxColorValue=255),#pink
+  Blemishes=rgb(red=165,green=237,blue=255,maxColorValue=255),#light blue
+  Price=rgb(red=25,green=178,blue=255,maxColorValue=255),#bright blue
+  Variety=rgb(red=178,green=255,blue=140,maxColorValue=255),#light green
+  Texture=rgb(red=50,green=255,blue=0,maxColorValue=255),#bright green
+  Colour=rgb(red=101,green=76,blue=255,maxColorValue=255),#purple
+  Taste=rgb(red=204,green=191,blue=255,maxColorValue=255),#lilac
+  Retailer=rgb(red=0,green=0,blue=0,maxColorValue=255),#black
+  BB4=rgb(red=100,green=100,blue=100,maxColorValue=255), #light grey
+  Other=rgb(red=50,green=50,blue=50,maxColorValue=255)#dark grey
+)
+#Colours for person characteristics
+personcol<-c(
+  Site=rgb(red=229,green=25,blue=50,maxColorValue=255),#red
+  Gender=rgb(red=25,green=178,blue=255,maxColorValue=255),#bright blue
+  Age=rgb(red=50,green=255,blue=0,maxColorValue=255),#bright green
+  Ethnic=rgb(red=204,green=191,blue=255,maxColorValue=255),#lilac
+  Frequency=rgb(red=255,green=127,blue=0,maxColorValue=255),#bright orange
+  Frequency2=rgb(red=255,green=127,blue=0,maxColorValue=255)#bright orange
+)
+```
+#Read in data
+```{r, include = FALSE}
+longpeach<-read.csv("longpeachWithEnzo.csv", stringsAsFactors = T)
+#Relevel purchase frequency
+longpeach$Frequency2<-factor(longpeach$Frequency2, levels = c("<1perMonth", "WeeklyToMonthly", ">1perWeek"))
+```
+
+##Separate out the peach characteristics and convert them to presence/absence
+```{r, include = FALSE}
+PAchars<-longpeach[,25:34]=="Yes"
+PAchars<-apply(PAchars, 2, as.numeric)
+#Remove any rows with 0 sums
+PAchars<-as.data.frame(PAchars)
+names(PAchars)<-names(longpeach[,25:34])
+```
+##Create a dataset with only the person and peach characteristics
+```{r, include = FALSE}
+peachperson<-longpeach[,c(1:6,36,23:34)]
+#Remove rows containing NAs
+peachperson<-peachperson[!apply(peachperson,1,function(x)any(is.na(x))),]
+#Relevel binomial categories so that No is the reference
+for (col in names(peachperson[,10:19])){
+  peachperson[,col]<-relevel(peachperson[,col], ref = "No")
+}
+```
+##Create a dataset with only the purchase characteristics
+```{r, include = FALSE}
+purchasedat<-longpeach[longpeach$Treatment=="Fresh",c(1:22, 35:36)]
+names(purchasedat)<-gsub("Scent", "Aroma", names(purchasedat))
+names(purchasedat)<-gsub("Name", "Variety", names(purchasedat))
+
+#Look at the distribution of person characterstics
+round(sapply(summary(purchasedat$Gender),function(x)x/359*100),2)
+round(sapply(summary(purchasedat$Site),function(x)x/359*100),2)
+round(sapply(summary(purchasedat$Age),function(x)x/359*100),2)
+round(sapply(summary(purchasedat$Ethnic),function(x)x/359*100),2)
+length(purchasedat$Nation[purchasedat$Nation %in% c("British", "Welsh", "English", "Scottish")])/359*100
+```
+##Collate characteristics which influence decision to purchase
+```{r, include = FALSE}
+all.purchase<-apply(purchasedat[,c(8,10:21)], 2, function(x) sum(x=="Yes", na.rm = T))
+all.purchase<-sort(all.purchase, decreasing = T)
+
+purchase.freq<-aggregate(purchasedat[,c(8,10:21)], by=list(purchasedat$Frequency2), function(x) sum(x=="Yes", na.rm = T))
+rownames(purchase.freq)<-purchase.freq[,"Group.1"]
+purchase.freq<-purchase.freq[,names(purchase.freq) != "Group.1"]
+purchase.freq<-as.matrix(purchase.freq)
+
+purchase.nation<-aggregate(purchasedat[,c(8,10:21)], by=list(purchasedat$Country), function(x) sum(x=="Yes", na.rm = T))
+rownames(purchase.nation)<-purchase.nation[,"Group.1"]
+purchase.nation<-purchase.nation[,names(purchase.nation) != "Group.1"]
+purchase.nation<-as.matrix(purchase.nation)
+```
+#Plotting
+##Basic plotting
+```{r, include = FALSE}
+plot(longpeach$Rating~longpeach$Treatment)
+plot(longpeach$Rating~longpeach$Site)
+plot(longpeach$Rating~longpeach$Gender)
+
+plot(longpeach$Juicy~longpeach$Crunchy)
+plot(longpeach$Soft~longpeach$Site)
+plot(longpeach$Soft~longpeach$Sweet)
+plot(longpeach$Soft~longpeach$Firm)
+```
+##NMDS
+```{r, include=FALSE}
+#Create a binomial distance matrix
+peachdist<-vegdist(PAchars[rowSums(PAchars)>0,], method = "binomial", binary = T)
+
+##Binomial NMDS. <0.05 is excellent, 0.05-0.1 is very good, 0.1-0.2 is adequate, 0.2 - 0.3 can cause problems, > 0.3 you need to increase the number of dimensions (via 'k=') that you allow the ordination to be carried out in.
+#NB This is SLOW for this dataset!
+#Didn't converge in 500 runs when k=2. Converged in 20 runs when k=3
+nmds1<-metaMDS(peachdist, trymax = 20, k=3, pc="TRUE")
+
+#Colour by site
+plot(nmds1$points[,1:2], pch=20, col=longpeach$Site[rowSums(PAchars)>0], xlab="NMDS1", ylab="NMDS2")
+legend("bottomright", levels(longpeach$Site), pch=20, bty="n", col=1:3)
+#Colour by Treatment
+plot(nmds1$points[,2:3], pch=20, col=longpeach$Treatment[rowSums(PAchars)>0], xlab="NMDS1", ylab="NMDS2")
+legend("bottomright", levels(longpeach$Treatment), pch=20, bty="n", col=1:3)
+#Colour by gender
+plot(nmds1$points[,1:2], pch=20, col=longpeach$Gender[rowSums(PAchars)>0], xlab="NMDS1", ylab="NMDS2")
+plot(nmds1$points[,2:3], pch=20, col=longpeach$Gender[rowSums(PAchars)>0], xlab="NMDS1", ylab="NMDS2")
+plot(nmds1$points[,c(1,3)], pch=20, col=longpeach$Gender[rowSums(PAchars)>0], xlab="NMDS1", ylab="NMDS2")
+```
+#Purchase characteristics
+##Demographics
+```{r}
+demog<- purchasedat %>% group_by(Site, Gender, Age, Ethnic, Nation) %>%
+  summarise(Respondent = length(Respondent))
+
+sum(demog$Respondent)
+
+write.csv(demog, "Demographics.csv")
+
+```
+
+##Plot purchase characteristics
+```{r, echo=FALSE}
+par(mfrow=c(1,2))
+for (i in 1:nrow(purchase.nation)){
+  p2<-purchase.nation[i,]
+  p2<-sort(p2, decreasing = T)
+  barplot(p2, main = rownames(purchase.nation)[i], las=2, 
+          ylab = "No. affirmative",
+          col = purchasecol[
+          match(names(p2),colnames(purchase.nation))])
+  legend("topright", legend = paste("n =", nrow(longpeach[longpeach$Treatment=="Fresh" & longpeach$Frequency2 == rownames(purchase.nation)[i],])), bty="n")
+}
+par(mfrow=c(1,1))
+
+
+par(mfrow=c(2,2))
+barplot(all.purchase, las = 2, main ="All respondents", 
+        ylab = "No. affirmative",
+        col = purchasecol[
+          match(names(all.purchase),names(purchasecol))])
+legend("topright", legend = paste("n =", nrow(purchasedat)), bty="n")
+mtext("(A)", side=3, adj=-0.15)
+for (i in 1:nrow(purchase.freq)){
+  p2<-purchase.freq[i,]
+  p2<-sort(p2, decreasing = T)
+  barplot(p2, main = rownames(purchase.freq)[i], las=2, 
+          ylab = "No. affirmative",
+          col = purchasecol[
+          match(names(p2),names(purchasecol))])
+  legend("topright", legend = paste("n =", nrow(purchasedat[purchasedat$Frequency2 == rownames(purchase.freq)[i],])-sum(is.na(purchasedat$Frequency2))), bty="n")
+  mtext(paste(c("(B)","(C)","(D)")[i]), side=3, adj=-0.15)
+}
+par(mfrow=c(1,1))
+dev.print(pdf,"Results/PurchaseCharacteristics.pdf", height =7, width = 10)
+
+plot(Frequency2~Country, data=longpeach[longpeach$Treatment=="Fresh",])
+
+```
+##mvabund
+```{r}
+mvpurchase<-mvabund(apply(purchasedat[!is.na(purchasedat$Frequency2),c(8,10:21)]=="Yes", 2, as.numeric))
+purchasemet<-purchasedat[!is.na(purchasedat$Frequency2),c("Country", "Frequency2", "Gender")]
+purchasemet<-purchasemet[!is.na(rowSums(mvpurchase)),]
+mvpurchase<-mvpurchase[!is.na(purchasemet$Gender),]
+mvpurchase<-mvpurchase[!is.na(rowSums(mvpurchase)),]
+purchasemet<-purchasemet[!is.na(purchasemet$Gender),]
+
+#Assess effect of nation whilst controlling for frequency and gender
+nat.purchasemod <- manyglm(mvpurchase ~ Gender + Frequency2 * Country, data=purchasemet, family="binomial")
+
+plot(nat.purchasemod)
+set.seed(47)
+nat.purchase.aov<-anova(nat.purchasemod, p.uni="adjusted")
+
+#No significant interaction
+nat.purchase.aov$table
+
+#Look at individual characters
+nat.purchase.aov$uni.p[-1,]
+
+#Assess effect of gender whilst controlling for nation and frequency
+gen.purchasemod <- manyglm(mvpurchase ~ Country * Frequency2 + Gender, data=purchasemet, family="binomial")
+
+set.seed(47)
+gen.purchase.aov<-anova(gen.purchasemod, p.uni="adjusted", pairwise.comp = purchasemet$Frequency2)
+gen.purchase.aov$table
+
+#Assess effect of frequency whilst controlling for nation and gender
+freq.purchasemod <- manyglm(mvpurchase ~ Gender + Country * Frequency2, data=purchasemet, family="binomial")
+
+set.seed(47)
+freq.purchase.aov<-anova(freq.purchasemod, p.uni="adjusted", pairwise.comp = purchasemet$Frequency2)
+
+freq.purchase.aov$table
+
+freq.purchase.aov$pairwise.comp.table
+freq.purchase.aov$uni.p[-1,]
+
+#Write output as table
+purchase.tests<-freq.purchase.aov$uni.p
+purchase.tests[2,]<-gen.purchase.aov$uni.p[4,]
+purchase.tests[3,]<-nat.purchase.aov$uni.p[4,]
+purchase.tests<-cbind(round(freq.purchase.aov$uni.test,2),
+                      round(purchase.tests,3))
+purchase.tests<-purchase.tests[,order(colnames(purchase.tests))]
+rownames(purchase.tests)<-gsub("2", "", rownames(purchase.tests))
+colnames(purchase.tests)<-paste0(c("LR.", "P."), colnames(purchase.tests))
+purchase.tests[-1,]
+write.csv(purchase.tests[-1,], "Results/PurchaseUnivariateTests.csv")
+```
+###Obtain model predictions
+```{r, include=FALSE}
+newdat<-data.frame(Country=rep(c("Italy", "UK"), each=6), Frequency2=rep(c("<1perMonth", "WeeklyToMonthly", ">1perWeek"), 4),
+                   Gender=rep(c("Male", "Female"), 2, each=3))
+
+purchase.predict<-predict(nat.purchasemod, newdat, type = "response", se.fit = T)
+purchase.predict$fit<-as.data.frame(purchase.predict$fit)
+purchase.predict$se.fit<-as.data.frame(purchase.predict$se.fit)
+purchase.predict$stack<-cbind(newdat, stack(purchase.predict$fit), stack(purchase.predict$se.fit))
+names(purchase.predict$stack)<-c("Country", "Frequency", "Gender", "fitted", "char", "se", "v1")
+
+purchase.predict$byNat<-aggregate(purchase.predict$stack$fitted, list(purchase.predict$stack$Country, purchase.predict$stack$char), mean)
+purchase.predict$byNat$x<-purchase.predict$byNat$x*100
+names(purchase.predict$byNat)<-c("nation", "char", "percent")
+
+purchase.predict$byFreq<-aggregate(purchase.predict$stack$fitted, list(purchase.predict$stack$Frequency, purchase.predict$stack$char), mean)
+purchase.predict$byFreq$x<-purchase.predict$byFreq$x*100
+names(purchase.predict$byFreq)<-c("freq", "char", "percent")
+purchase.predict$byFreq$freq<-factor(purchase.predict$byFreq$freq, levels=c("<1perMonth", "WeeklyToMonthly", ">1perWeek"))
+
+```
+##Plot based on mvabund
+###Differences between nations
+```{r, include=FALSE}
+summary(purchasedat$Country[!is.na(purchasedat$Frequency2)])
+
+purchase.nation.percent<-data.frame(percent=rep(NA, 26))
+purchase.nation.percent$percent<-c(round(purchase.nation[1,]/111*100, digits=0),
+round(purchase.nation[2,]/204*100, digits=0))
+purchase.nation.percent$char<-rep(colnames(purchase.nation),  2)
+purchase.nation.percent$nation<-rep(rownames(purchase.nation), each=13)
+
+nat.purchase.aov$uni.p[3,]
+
+width<-0.7
+purchase.plot1<-ggplot(purchase.nation.percent, aes(x=reorder(char, -percent), y=percent, fill=nation)) +
+  #Real data
+  geom_col(position=position_dodge(), width=width) +
+  #Model predictions
+  geom_col(data=purchase.predict$byNat, aes(alpha=0.25), colour="#555555",  position=position_dodge(), show.legend = F, width=width) +
+  #Real data outlines
+  geom_col(position=position_dodge(), colour="black", alpha=0, show.legend = F, width=width) +
+  labs(x="Character", y="% affirmative") +
+  scale_x_discrete(labels=gsub("Variety", "Variety name", levels(reorder(purchase.nation.percent$char, -purchase.nation.percent$percent)))) +
+  scale_fill_manual(values=c("#32FF00", "#19B2FF"),"Nation") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.8)) +
+  annotate("text", x = c(1,4,5,6,7,8,10), y=c(82, 43, 47, 42, 32, 33, 24), label = "*") +
+  coord_cartesian(clip = 'off') +
+  geom_text(aes(label = "(B)", x = Inf, y = 85), hjust = -1)
+```
+###Differences between frequences
+```{r, include=FALSE}
+summary(purchasedat$Frequency2[!is.na(purchasedat$Frequency2)])
+
+purchase.freq.percent<-data.frame(percent=rep(NA, 39))
+purchase.freq.percent$percent<-c(round(purchase.freq[1,]/115*100, digits=0),
+  round(purchase.freq[2,]/74*100, digits=0),
+  round(purchase.freq[3,]/126*100, digits=0))
+purchase.freq.percent$char<-rep(colnames(purchase.freq),  3)
+purchase.freq.percent$freq<-as.factor(rep(rownames(purchase.freq), each=13))
+purchase.freq.percent$freq<-factor(purchase.freq.percent$freq, levels=c("<1perMonth", "WeeklyToMonthly", ">1perWeek"))
+
+freq.purchase.aov$uni.p[3,]
+
+purchase.plot2<-ggplot(purchase.freq.percent, aes(x=reorder(char, -percent), y=percent, fill=freq)) +
+  #Real data
+  geom_col(position=position_dodge(), colour="black", width=width) +
+  #Model predictions
+  geom_col(data=purchase.predict$byFreq, aes(alpha=0.25), colour="#555555",  position=position_dodge(), show.legend = F, width=width) +
+  #Real data outlines
+  geom_col(position=position_dodge(), colour="black", alpha=0, show.legend = F, width=width) +
+  labs(x="Character", y="% affirmative") +
+  scale_fill_manual(values=c("#FFBF7F", "#FF99BF", "#E51932"),"Frequency") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.8)) +
+  coord_cartesian(clip = 'off') +
+  geom_text(aes(label = "(C)", x = Inf, y = 72), hjust = -1)
+
+#Plot frequency against country
+freqBycountry<-aggregate(purchasedat$Frequency2, list(purchasedat$Frequency2, purchasedat$Country), length)
+names(freqBycountry)<-c("Freq", "Country", "No")
+freqBycountry$No[1:3]<-freqBycountry$No[1:3]/111*100
+freqBycountry$No[4:6]<-freqBycountry$No[4:6]/204*100
+purchase.plot3<-ggplot(freqBycountry, aes(x=Country, y=No, fill=Freq)) +
+  geom_col() +
+  scale_fill_manual(values=c("#FFBF7F", "#FF99BF", "#E51932"),"Frequency") +
+  labs(x="Country", y="Percent") +
+  theme_bw() +
+  coord_cartesian(clip = 'off') +
+  geom_text(aes(label = "(A)", x = Inf, y = 97), hjust = -1)
+```
+```{r}
+chisq.test(purchasedat$Frequency2, purchasedat$Country)
+
+multiplot(purchase.plot3, purchase.plot1, cols = 2)
+dev.print(pdf, "./Results/PurchaseCharacteristics.pdf", height=5, width=8)
+dev.print(png, "./Results/Fig2.png", height=5, width=8, units="in", res=500)
+```
+#Liking rating
+##Modelling liking
+```{r, include=FALSE}
+names(longpeach)
+qqnorm(longpeach$Rating)
+
+#Based on peach characteristics
+mod1<-clmm(as.factor(Rating)~Aroma + Sweet + Acid + Bitter + Astringent + Juicy + Crunchy + Fibrous + Firm + Soft + (1|Respondent), data = peachperson, na.action = na.fail)
+
+#Check assumptions
+mod1.check<-clm(as.factor(Rating)~Aroma + Sweet + Acid + Bitter + Astringent + Juicy + Crunchy + Fibrous + Firm + Soft + Respondent, data = peachperson, na.action = na.fail)
+
+nominal_test(mod1.check)
+
+#Get the full model set and export it (as it takes a long time to run)
+#peach.model.set<-dredge(mod1)
+#saveRDS(peach.model.set, "peach.model.setCombined.Rdata")
+peach.model.set<-readRDS("peach.model.setCombined.Rdata")
+
+#Look at only the best models (delta<2)
+best.peach.models<-peach.model.set[peach.model.set$delta<2,]
+best.peach.models
+for (i in 1:nrow(best.peach.models)){
+  best.peach.models$Terms[i]<-paste0(names(peach.model.set[,2:11])[!is.na(peach.model.set[i,2:11])], collapse = " + ")
+}
+```
+Best models for the peach characteristics
+```{r, echo=FALSE}
+cbind(best.peach.models$Terms, round(best.peach.models[,12:16],2))
+write.csv(cbind(best.peach.models$Terms, round(best.peach.models[,12:16],2)), "Results/BestPeachModels.csv")
+```
+```{r, include=FALSE}
+#Get averaged parameters across the whole peach model set
+av.mod<-model.avg(best.peach.models)
+av.mod$coefficients
+av.param<-as.data.frame(confint(av.mod)[-c(1:9),])
+av.param$Full<-av.mod$coefficients[1,10:18]
+```
+```{r, include=FALSE}
+#Based on person characteristics
+mod2<-clmm(as.factor(Rating)~Site + Gender + Age + Ethnic + Frequency2 + (1|Respondent), data = peachperson, na.action = na.fail) #omitted Nation due to singularities
+
+#Check assumptions
+mod2.check<-clm(as.factor(Rating)~Site + Gender + Age + Ethnic + Frequency2 + Respondent, data = peachperson, na.action = na.fail)
+
+nominal_test(mod2.check)
+#Some problems - thankfully detailed results not needed for this model
+
+person.model.set<-dredge(mod2)
+```
+##Plot model results
+```{r, echo=FALSE}
+
+#Combined plot of the rating models
+par(mfrow=c(2,2), mar = c(7, 5, 1, 2) + 0.1)
+#Compare the peach and person model sets
+boxplot(peach.model.set$AICc[peach.model.set$delta<6], person.model.set$AICc[person.model.set$delta<6],
+        at = c(1,2),
+        names = c("Peach", "Person"),
+        las = 1,
+        ylab = "AICc")
+mtext("(A)", side=3, adj=-0.2)
+plot.new()
+#Plot how many times each predictor occured in the peach acceptable models (delta<6)
+n.imp<-apply(peach.model.set[peach.model.set$delta<6,2:11], 2, function(x) sum(x=="+", na.rm = T))
+barplot(n.imp, ylab = "No. of occurrences", xlab = "", cex.names = 0.8, las=2,
+        col =  charcol[
+          match(names(n.imp),names(charcol))])
+title(xlab="Peach characteristics", line=5)
+mtext("(B)", side=3, adj=-0.2)
+#Plot how many times each predictor occured in the person acceptable models (delta<6)
+n.imp2<-apply(person.model.set[person.model.set$delta<6,2:6], 2, function(x) sum(x=="+", na.rm = T))
+barplot(n.imp2, ylab = "No. of occurrences", xlab = "",
+        col =  personcol[
+          match(names(n.imp2),names(personcol))])
+title(xlab="Person characteristics", line=5)
+mtext("(C)", side=3, adj=-0.2)
+par(mfrow=c(1,1), mar = c(5, 5, 4, 2) + 0.1)
+
+dev.print(pdf,"Results/RatingPredictors.pdf", height =7, width = 10)
+dev.print(png, "./Results/Fig4.png", height=7, width=10, units="in", res=500)
+
+#Plot parameter estimates for best peach models
+ggplot(data = av.param, aes(x=rownames(av.param), y=Full)) + 
+  geom_hline(yintercept = 0, lty=2) +
+  geom_point(aes(size=0.5, col = gsub("Yes","",rownames(av.param)))) +
+  geom_errorbar(aes(ymin=`2.5 %`, ymax=`97.5 %`, 
+                    lwd=0.25, col = gsub("Yes","",rownames(av.param)))) + 
+  scale_colour_manual(values=charcol[
+    match(gsub("Yes","",rownames(av.param)),names(charcol))]) + 
+  theme_bw() + 
+  guides(colour = "none", size = "none") +
+  scale_x_discrete("Parameters", labels=function(x)gsub("Yes","",x)) +   labs(y="Full model averaged value")
+
+dev.print(pdf,"Results/RatingParameterValues.pdf", height =7, width = 10)
+dev.print(png, "./Results/Fig5.png", height=7, width=10, units="in", res=500)
+```
+##Site and treatment effects
+```{r, include=FALSE}
+#Plot rating by treatment filled by site
+ggplot(longpeach, aes(x=Treatment, y=Rating, fill=factor(Site))) + 
+  geom_boxplot() + 
+  labs(x="Treatment", y="Rating") +
+  theme_bw() +
+  scale_fill_manual(values=c("#424242", "#6E6E6E", "#A4A4A4"),"Site")
+
+#Investigate how similar the treatment ratings are in Calabria
+siteIT<-longpeach[longpeach$Site=="IT",c("Rating", "Treatment","Respondent")]
+plot(siteIT$Rating~siteIT$Treatment)
+plot(siteIT$Rating~siteIT$Respondent, col = siteIT$Treatment)
+boxplot(siteIT$Rating~siteIT$Respondent)
+```
+##Test the effect of treatment and site
+```{r, include=FALSE}
+likemod<-clmm(as.factor(Rating)~Site+Treatment+Site:Treatment + (1|Respondent), data = longpeach)
+
+#Check assumptions
+likemod.check<-clm(as.factor(Rating)~Site+Treatment+Site:Treatment + Respondent, data = longpeach)
+
+nominal_test(likemod.check)
+```
+```{r, echo=FALSE}
+RVAideMemoire::Anova.clmm(likemod, type="II")
+
+#Pairwise comparisons
+marginal<-lsmeans(likemod, pairwise ~ Treatment:Site, adjust="tukey") 
+marginal$lsmeans<-marginal$lsmeans[order(marginal$lsmeans[,"lsmean"]),]
+
+CLD <- cld(marginal,
+          alpha=0.05,
+          Letters=letters,)
+CLD<-CLD[order(CLD$Site, CLD$Treatment),]
+
+#Plot rating by site filled by treatment
+ggplot(longpeach, aes(x=Site, y=Rating, fill=factor(Treatment))) + 
+  geom_boxplot(width=1, coef=0,  outlier.colour="white",
+) + 
+  geom_violin(alpha=0.5, scale = "count", width=1, show.legend=F) + 
+  labs(x="Site", y="Rating") +
+  theme_bw() +
+  annotate("text", x = c(0.66,1,1.33, 1.66,2,2.33, 2.63,3,3.33 ), y=10, label = CLD$.group) + coord_cartesian(clip = 'off') +
+  scale_y_continuous(breaks=seq(0,9), limits=c(0,10)) + 
+  scale_fill_manual(values=c("#A5EDFF", "#19B2FF", "#B2FF8C"),"Treatment", labels=c("Commercial harvest", "Stored 1\u00b0C", "Stored 5\u00b0C"))
+
+dev.print(pdf,"Results/RatingSiteTreatment.pdf")
+dev.print(png, "./Results/Fig3.png", height=8, width=10, units="in", res=500)
+
+```
+#Peach characteristics
+##Plotting by site and treatment
+```{r, include=FALSE}
+chartab<-aggregate(PAchars, by=list(longpeach$Site, longpeach$Treatment), sum)
+chartab2<-stack(chartab)
+chartab2$Site<-rep(chartab$Group.1)
+chartab2$Treatment<-rep(chartab$Group.2)
+
+#Plot characteristics by treatment filled by site
+ggplot(chartab2, aes(x=Treatment, y=values, fill=factor(Site))) + 
+  geom_bar(stat="identity",position = "dodge", na.rm=TRUE) + 
+  labs(x="Treatment", y="No. affirmative") +
+  facet_wrap(~ind) + theme_bw() +
+  scale_fill_manual(values=c("#424242", "#6E6E6E", "#A4A4A4"),"Site")
+
+#Plot characteristics by site filled by treatment
+ggplot(chartab2, aes(x=Site, y=values, fill=factor(Treatment))) + 
+  geom_bar(stat="identity",position = "dodge", na.rm=TRUE) + 
+  labs(x="Location", y="No. affirmative") +
+  facet_wrap(~ind) + theme_bw() +
+  scale_fill_manual(values=c("#424242", "#6E6E6E", "#A4A4A4"),"Treatment")
+```
+##Tables of characteristics
+```{r, echo=FALSE}
+nrow(longpeach[longpeach$Aroma=="Yes",])
+nrow(longpeach[longpeach$Aroma=="Yes"&longpeach$Sweet=="Yes",])
+
+makeCharMatrix<-function(data){
+  allChars<-matrix("",nrow = ncol(PAchars)-1, ncol = ncol(PAchars)-1, dimnames = list(names(PAchars)[-10],names(PAchars)[-1]))
+  charlist<-c("Aroma", "Sweet", "Acid", "Bitter", "Astringent", "Juicy", "Crunchy", "Fibrous", "Firm", "Soft")
+  for (i in 1:9){
+    for (j in (i+1):10){
+      v1<-charlist[i]
+      v2<-charlist[j]
+      allChars[i,v2]<-nrow(data[data[,v1]=="Yes"&data[,v2]=="Yes",])
+    }
+  }
+  return(allChars)
+}
+
+allChars<-makeCharMatrix(longpeach)
+C1chars<-makeCharMatrix(longpeach[longpeach$Site=="CF1",])
+C2chars<-makeCharMatrix(longpeach[longpeach$Site=="CF2",])
+ITchars<-makeCharMatrix(longpeach[longpeach$Site=="IT",])
+
+fisher.test(table(longpeach$Aroma, longpeach$Sweet))
+```
+##Characteristic co-occurrence
+```{r, echo=FALSE}
+pairwiseChar<-function(data){
+  char.fisher<-matrix(NA, nrow=45, ncol=7, dimnames=list(seq(1, 45), c("Comparison", "Both", "Char1", "Char2", "Neither", "OddsRatio", "P")))
+  comps<-vector()
+  charlist<-c("Aroma", "Sweet", "Acid", "Bitter", "Astringent", "Juicy", "Crunchy", "Fibrous", "Firm", "Soft")
+  for (i in 1:9){
+    for (j in (i+1):10){
+      if(i == 1 & j == 2){x<-1}
+      else {x<-x+1}
+      v1<-charlist[i]
+      v2<-charlist[j]
+      tab<-table(data[,v1], data[,v2])
+      fish<-fisher.test(tab)
+      comps[[x]]<-paste(v1, "vs", v2)
+      char.fisher[x,2]<-tab[[1]]
+      char.fisher[x,3]<-tab[[3]]
+      char.fisher[x,4]<-tab[[2]]
+      char.fisher[x,5]<-tab[[4]]
+      char.fisher[x,6]<-fish[[3]]
+      char.fisher[x,7]<-fish[[1]]
+    }
+}
+
+char.fisher<-as.data.frame(char.fisher)
+char.fisher$Comparison<-comps
+char.fisher$P.adj<-round(p.adjust(char.fisher$P, method = "BH"),3)
+
+char.fisher$OddsRatio<-round(char.fisher$OddsRatio, 2)
+char.fisher$P<-round(char.fisher$P, 3)
+
+return(char.fisher)
+}
+
+char.fisher<-pairwiseChar(longpeach[,25:34])
+
+char.fisher
+
+write.csv(char.fisher, "Results/CharacterCo-occurrence.csv")
+
+it.char.fisher<-pairwiseChar(longpeach[longpeach$Site=="IT",25:34])
+c1.char.fisher<-pairwiseChar(longpeach[longpeach$Site=="CF1",25:34])
+c2.char.fisher<-pairwiseChar(longpeach[longpeach$Site=="CF2",25:34])
+```
+##Plotting characteristics against each other
+```{r, echo=FALSE}
+makecharnetwk<-function(fisher.result, sig.only=FALSE){
+  if(sig.only==TRUE){
+    sig.chars<-fisher.result[fisher.result$P.adj<=0.05,]
+  }
+  else {
+  sig.chars<-fisher.result
+  }
+  
+  sig.chars.nodes<-cbind(gsub("(.+) vs.+", "\\1", sig.chars$Comparison), gsub(".+vs (.+)", "\\1", sig.chars$Comparison))
+  
+  char.netwk<-graph_from_edgelist(sig.chars.nodes, directed = F)
+
+  #Color of nodes based on averaged model coefficients
+  red<-(av.param$Full/max(abs(av.param$Full)))[match(names(V(char.netwk)), gsub("Yes","",rownames(av.param)))]
+  red[red<0]<-0
+  blue<-(av.param$Full/max(abs(av.param$Full)))[match(names(V(char.netwk)), gsub("Yes","",rownames(av.param)))]
+  blue[blue>0]<-0
+  blue<-blue*-1
+  V(char.netwk)$color<-rgb(1-blue, 1-(blue+red), 1-red)
+  
+  #Size of nodes based on degree
+  V(char.netwk)$size<-degree(char.netwk)*1.5#5+15/diff(range(degree(char.netwk)))*degree(char.netwk)
+  
+  V(char.netwk)$label.color<-"black"
+  
+  #Colour of edges based on direction of association
+  E(char.netwk)[sig.chars$OddsRatio>1]$color<-"red"
+  E(char.netwk)[sig.chars$OddsRatio<1]$color<-"#0000AA"
+
+  E(char.netwk)$lty<-1
+  E(char.netwk)[sig.chars$P.adj>0.05]$lty<-3
+  
+  #Size of edges based on significance
+  E(char.netwk)$width<-1/((sig.chars$P.adj+0.001)*100)
+  #Size of edges based on strength of association
+#  E(char.netwk)[sig.chars$OddsRatio>1]$width<-(sig.chars$OddsRatio-1)*10
+#  E(char.netwk)[sig.chars$OddsRatio<=1]$width<-sig.chars$OddsRatio*10
+  return(char.netwk)
+}
+
+all.char.netwk<-makecharnetwk(char.fisher, sig.only = TRUE)
+V(all.char.netwk)$label.dist<-c(2.5,1.5,2,1.5,1.5,2.5,1.5,1.5,1.5,2.5)
+V(all.char.netwk)$label.degree<-c(0,-pi/2,0,pi/2,-pi/2,pi,pi/2,-pi/2,-pi/2,pi)
+
+#tk1<-tkplot(char.netwk)
+#coord<-tk_coords(tk1)
+coord<-readRDS("char.ntwk.coord.Rdata")
+coord<-coord[-11,]
+
+plot(all.char.netwk, layout=coord)
+
+dev.print(pdf, "./Results/sig-char-pairs.pdf", height=6, width=6)
+dev.print(png, "./Results/Fig6.png", height=6, width=6, units="in", res=500)
+
+c1.char.ntwk<-makecharnetwk(c1.char.fisher, sig.only = TRUE)
+c2.char.ntwk<-makecharnetwk(c2.char.fisher, sig.only = TRUE)
+it.char.ntwk<-makecharnetwk(it.char.fisher, sig.only = TRUE)
+
+par(mfrow=c(2,2))
+plot(all.char.netwk, layout=coord, main="All")
+mtext("(A)", side=3, adj=-0.15)
+plot(it.char.ntwk, layout=coord[match(names(V(it.char.ntwk)),names(V(all.char.netwk))),], main="Site IT")
+mtext("(B)", side=3, adj=-0.15)
+plot(c1.char.ntwk, layout=coord[match(names(V(c1.char.ntwk)),names(V(all.char.netwk))),], main="Site CF1")
+mtext("(C)", side=3, adj=-0.15)
+plot(c2.char.ntwk, layout=coord[match(names(V(c2.char.ntwk)),names(V(all.char.netwk))),], main="Site CF2")
+mtext("(D)", side=3, adj=-0.15)
+par(mfrow=c(1,1))
+dev.print(pdf, "./Results/char-pairs-by-site.pdf", height=8, width=12)
+dev.print(png, "./Results/FigS1.png", height=6, width=6, units="in", res=500)
+
+rbind(char.fisher[9,], c1.char.fisher[9,], c2.char.fisher[9,], it.char.fisher[9,])
+```
+##mvabund for site adn treatment effects on character perception
+```{r, echo=FALSE}
+mvpeach<-mvabund(PAchars)
+
+mvmod <- manyglm(mvpeach ~ longpeach$Site*longpeach$Treatment, family="binomial")
+plot(mvmod)
+mv.aov<-anova(mvmod, p.uni="adjusted")
+mv.aov$table
+mvmod$coefficients
+
+uni.tests<-cbind(round(mv.aov$uni.test,2), round(mv.aov$uni.p,3))
+colnames(uni.tests)<-c(paste0(colnames(uni.tests)[1:10], ".Dev"),paste0(colnames(uni.tests)[11:20], ".P"))
+uni.tests<-uni.tests[,order(colnames(uni.tests))]
+write.csv(uni.tests[-1,], "Results/univariateTests.csv")
+
+gender.check <- manyglm(mvpeach ~ longpeach$Gender, family="binomial")
+plot(gender.check)
+gen.aov<-anova(gender.check, p.uni="adjusted")
+gen.aov$table
+```
+##Plotting based on mvabund
+```{r, echo=FALSE}
+facetlist<-list()
+#Plot characteristics with significant interaction 
+for (i in c("Acid", "Aroma", "Crunchy", "Firm", "Juicy", "Sweet")){
+  facetlist[[i]]<-ggplot(chartab2 %>% filter(ind == i),
+       aes(x=Site, y=values, fill=factor(Site), alpha=factor(Treatment))) + 
+  geom_bar(stat="identity",position = "dodge", na.rm=TRUE) + 
+  labs(x="Location", y="No. affirmative") +
+  facet_wrap(~ind) + theme_bw() + 
+  theme(strip.background = element_rect(fill="#654CFF")) +
+  scale_fill_manual(values=c("#FF7F00", "#19B2FF", "#E51932"), guide = "none") +
+  scale_alpha_manual(values=c(0.5, 0.75, 1), guide = "none")
+}
+#Plot characteristics only affected by site 
+for (i in c("Fibrous", "Soft")){
+ facetlist[[paste0("S.",i)]]<-ggplot(chartab2 %>% filter(ind == i),
+                  aes(x=Site, y=values, fill=factor(Site))) + 
+    geom_bar(stat="identity",position = "dodge", na.rm=TRUE) + 
+    labs(x="Location", y="No. affirmative", tab = "(A)") +
+    facet_wrap(~ind) + theme_bw() + 
+    theme(strip.background = element_rect(fill="#A5EDFF")) +
+    scale_fill_manual(values=c("#FF7F00", "#19B2FF", "#E51932"), guide = "none")
+}
+#Plot characteristics only affected by treatment
+for (i in c("Astringent", "Bitter", "Soft")){
+ facetlist[[paste0("T.",i)]]<-ggplot(chartab2 %>% filter(ind == i),
+                  aes(x=Treatment, y=values, fill=factor(Treatment))) + 
+  geom_bar(stat="identity",position = "dodge", na.rm=TRUE) + 
+  labs(x="Treatment", y="No. affirmative") +
+  scale_x_discrete(labels=c("Stored 1\u00b0C", "Stored 5\u00b0C", "Commercial harvest")) +
+  facet_wrap(~ind) + theme_bw() + 
+  theme(strip.background = element_rect(fill="#FF99BF")) +
+  scale_fill_manual(values=c("#A4A4A4", "#6E6E6E", "#424242"), guide = "none")
+}
+
+marrangeGrob(facetlist, nrow = 4, ncol = 3, top = NULL)
+dev.print(pdf, "Results/mvabundCharacters.pdf", height = 9, width = 12)
+dev.print(png, "./Results/Fig7.png", height=9, width=12, units="in", res=500)
+dev.off()
+
+```
+##Bipartite character and treatment
+```{r, include=FALSE}
+get.bip.chars<-function(bp.char){
+  rownames(bp.char)<-bp.char$Group.1
+  bp.char$Group.1<-NULL
+  bp.g<-graph_from_incidence_matrix(as.matrix(bp.char), weighted = T)
+  
+  E(bp.g)$width<-E(bp.g)$weight/2
+  #E(bp.g)$color<-c(rep("blue", 11), rep("green", 11), rep("orange", 11))
+  E(bp.g)$color<-charcol[match(gsub(".+--", "", ends(bp.g, E(bp.g))[,2]), names(charcol))]
+  
+  V(bp.g)$size<-c(rep(33,3),colSums(bp.char))/2
+  
+  V(bp.g)$color<-charcol[match(names(V(bp.g)), names(charcol))]
+  V(bp.g)$color[is.na(V(bp.g)$color)]<-"#AAAAAA"
+  V(bp.g)$label.cex<-0.7
+  
+  return(bp.g)
+}
+
+
+bp.char<-aggregate(longpeach[,25:34], list(longpeach$Treatment), function(x)sum(x=="Yes"))
+bp.char[,-1]<-(bp.char[,-1]*100)/(359*3)
+
+bp.it<-aggregate(longpeach[longpeach$Site=="IT",25:34], list(longpeach$Treatment[longpeach$Site=="IT"]), function(x)sum(x=="Yes"))
+bp.it[,-1]<-(bp.it[,-1]*100)/(155*3)
+
+bp.c1<-aggregate(longpeach[longpeach$Site=="CF1",25:34], list(longpeach$Treatment[longpeach$Site=="CF1"]), function(x)sum(x=="Yes"))
+bp.c1[,-1]<-(bp.c1[,-1]*100)/(103*3)
+
+bp.c2<-aggregate(longpeach[longpeach$Site=="CF2",25:34], list(longpeach$Treatment[longpeach$Site=="CF2"]), function(x)sum(x=="Yes"))
+bp.c2[,-1]<-(bp.c2[,-1]*100)/(101*3)
+
+coord2<-readRDS("bipar.ntwk.coord.Rdata")
+coord2<-coord2[-11,]
+
+bp.all<-get.bip.chars(bp.char)
+bp.it<-get.bip.chars(bp.it)
+bp.c1<-get.bip.chars(bp.c1)
+bp.c2<-get.bip.chars(bp.c2)
+par(mfrow=(c(2,2)), mar=rep(0.1,4))
+plot(bp.all, layout=coord2, asp=0.35); text(-0.3, 1.2,"All", font=2)
+plot(bp.it, layout=coord2, asp=0.35); text(-0.3, 1.2,"Site IT", font=2)
+plot(bp.c1, layout=coord2, asp=0.35); text(-0.3, 1.2,"Site CF1", font=2)
+plot(bp.c2, layout=coord2, asp=0.35); text(-0.3, 1.2,"Site CF2", font=2)
+dev.print(pdf, "./Results/bipartite-char.pdf", width=12, height=8)
+dev.off()
+```
+#Putting the picture together
+nation-purchase-rating-char
+non-random assortment to liking?
+Hypotheses:
+- greater effect of char if stated as imp in buying preference
+- this translates to national fx
+- frequent buyers are more consistent
+###Aquiescence
+```{r, echo=FALSE}
+#Calculate the number of 'yes' responses per country for each category
+aqu<-aggregate(longpeach[,c(25:34)], list(longpeach$Country), function(x){sum(x=="Yes", na.rm = T)})
+#Turn it into a %
+aqu2<-as.data.frame(apply(aqu[,-1], 2, function(x)x/c(465,612)*100))
+aqu2<-cbind(aqu$Group.1, stack(aqu2))
+names(aqu2)<-c("Country", "Aqui", "Char")
+#Calcuate % aquiescence for each country (based on no. respondents * categories)
+rowSums(aqu[,-1])/c(465*10,612*10)*100
+#Plot aquiescence against country
+plot(aqu2$Aqui~aqu2$Country)
+#Test it
+qqnorm(aqu2$Aqui);qqline(aqu2$Aqui)
+aqu.test<-dunn.test::dunn.test(aqu2$Aqui, aqu2$Country)
+```
+###For each character, calculate the difference in rating when it was yes vs no
+```{r, echo=FALSE}
+#Create a list of characters, mean rating they were when yes and no for each respondent, and the difference that made
+char.diff<-data.frame(Respondent=unique(longpeach$Respondent))
+for (j in names(longpeach)[25:34]){
+  char.fx<-matrix(NA, nrow = length(unique(longpeach$Respondent)), ncol = 2, dimnames = list(unique(longpeach$Respondent), c("Yes", "No")))
+  for (i in unique(longpeach$Respondent)){
+    agg<-aggregate(longpeach$Rating[longpeach$Respondent==i], list(longpeach[,j][longpeach$Respondent==i]), mean)
+    char.fx[i,agg$Group.1]<-agg$x
+  }
+  char.diff[,j]<-char.fx[,"Yes"]-char.fx[,"No"]
+}
+#Add in purchase characteristics
+diff.fx<-cbind(char.diff, purchasedat[match(char.diff$Respondent, purchasedat$Respondent),c(2:4,10,16:18,23:24)])
+#Stack the difference columns
+diff.fx<-cbind(stack(diff.fx[,2:11]), diff.fx[,c(1,12:20)])
+names(diff.fx)[1:2]<-c("Diff", "Char")
+#Stack the purchase columns
+for (i in names(diff.fx)[7:10]){
+  diff.fx[,i]<-as.character(diff.fx[,i])
+}
+diff.fx<-cbind(stack(diff.fx[,7:10]), diff.fx[,c(1:6,11:12)])
+names(diff.fx)[1:2]<-c("Imp.purch", "Purch")
+diff.fx$Imp.purch<-factor(diff.fx$Imp.purch, levels = c("Yes", "No"))
+
+#Match peach characteristics to purchase characteristics
+char2purch<-matrix(c(
+  "Aroma", "Aroma",
+  "Sweet", "Ripeness",
+  "Sweet", "Taste",
+  "Acid", "Taste",
+  "Bitter", "Taste",
+  "Astringent", "Taste",
+  "Juicy", "Ripeness",
+  "Juicy", "Texture",
+  "Crunchy", "Texture",
+  "Fibrous", "Texture",
+  "Firm", "Texture",
+  "Soft", "Ripeness",
+  "Soft", "Texture"), 
+  ncol=2, byrow = T)
+colnames(char2purch)<-c("char", "purch")
+```
+###Plot differences
+```{r, echo=FALSE}
+ggplot(diff.fx[!is.na(diff.fx$Imp.purch),], aes(x=Purch, y=Diff, fill=Imp.purch)) +
+  geom_boxplot() +
+  geom_hline(yintercept = 0, linetype = 2) +
+  facet_wrap(~Char, scales = "free_x") +
+  theme_bw() 
+
+#Plot difference against country
+ggplot(diff.fx, aes(x=Char, y=Diff, fill=Country)) +
+  geom_boxplot() +
+  geom_hline(yintercept = 0, linetype = 2) +
+  theme_bw() 
+
+#Plot difference against gender
+ggplot(diff.fx[!is.na(diff.fx$Gender),], aes(x=Char, y=Diff, fill=Gender)) +
+  geom_boxplot() +
+  geom_hline(yintercept = 0, linetype = 2) +
+  theme_bw() 
+
+#Plot difference against frequency
+ggplot(diff.fx[!is.na(diff.fx$Frequency2),], aes(x=Char, y=Diff, fill=Frequency2)) +
+  geom_boxplot() +
+  geom_hline(yintercept = 0, linetype = 2) +
+  theme_bw() 
+
+#Plot just aroma 
+plot(Diff~Imp.purch, data = diff.fx[diff.fx$Purch=="Aroma" & diff.fx$Char=="Aroma",], notch=T, xlab="Aroma important to purchase", ylab="Rating difference when aroma present", col=c("red", "blue"))
+points(Diff~Imp.purch, data = diff.fx[diff.fx$Purch=="Aroma" & diff.fx$Char=="Aroma",], pch=20)
+abline(h=0, lty=2, xpd=FALSE)
+
+dev.print(pdf, "Results/AromaDiff.pdf")
+dev.print(png, "./Results/Fig8.png", height=7, width=7, units="in", res=500)
+
+#Plot difference against purchase preference
+par(mfrow=c(3,5))
+for (i in 1:nrow(char2purch)){
+  j<-char2purch[i,"char"]
+  h<-char2purch[i,"purch"]
+  #Plot it
+  plot(char.diff[,j]~purchasedat[,h], xlab=h, ylab=paste0("Difference (", j, ")"))
+  abline(0,0, lty=2)
+}
+par(mfrow=c(1,1))
+```
+##Model difference against purchase preference
+Can't do mvabund as each row has at least one NA
+```{r, echo=FALSE}
+for (i in unique(char2purch[,"char"])){
+  j<-unique(char2purch[,"purch"][char2purch[,"char"]==i])
+  print(paste(i, j))
+  if(length(j)>1){
+    h<-j[2]
+    j<-j[1]
+    names<-c(h, j, "Country", "Frequency", "Gender", paste0(h,":Country"), paste0(h,":Frequency"), paste0(j,":Country"), paste0(j,":Frequency"))
+    form<-as.formula("char.diff[,i] ~ purchasedat[,h] + purchasedat[,j] + purchasedat$Country + purchasedat$Frequency + purchasedat$Gender + purchasedat[,h]:purchasedat$Country + purchasedat[,h]:purchasedat$Frequency + purchasedat[,j]:purchasedat$Country + purchasedat[,j]:purchasedat$Frequency")
+  }
+  else {names<-c(j, "Country", "Frequency", "Gender", paste0(j,":Country"), paste0(j,":Frequency"))
+    form<-as.formula("char.diff[,i] ~ purchasedat[,j] +  purchasedat$Country + purchasedat$Frequency + purchasedat$Gender + purchasedat[,j]:purchasedat$Country + purchasedat[,j]:purchasedat$Frequency")
+  }
+  try(m.j<-cbind(rep(i, length(names)), names, 
+                 Anova(glm(form), type = 2)))
+  if(!exists("tests")){tests<-m.j}
+  else if (exists("m.j")) {tests<-rbind(tests, m.j)}
+  try(rm(m.j))
+}
+
+names(tests)[1:2]<-c("Character", "Predictor")
+tests[tests$`Pr(>Chisq)`<0.05,]
+#Adjust for multiple testing
+tests$P.adj<-p.adjust(tests$`Pr(>Chisq)`, method = "BH")
+tests[tests$P.adj<0.05,]
+#Tidy up table
+for(i in c("LR Chisq", "Pr(>Chisq)", "P.adj")){
+  tests[,i]<-round(tests[,i], 3)
+}
+write.csv(tests, "TableS5.csv", row.names = F)
+```
+###mvabund
+```{r, echo=FALSE}
+mvperson <- manyglm(mvpeach ~ longpeach$Age + longpeach$Gender + longpeach$Frequency2 + longpeach$Country, family="binomial")
+plot(mvperson)
+mvperson$var.coefficients
+
+person.aov<-anova(mvperson, p.uni="adjusted")
+person.aov$table
+```
